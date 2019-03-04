@@ -1,0 +1,1360 @@
+var alreadyStarted = false;
+function initMod(){
+    if (top.frames["d_act"].global_data != undefined && top.frames["d_act"].global_data.my_group != undefined) {
+        if(localStorage.getItem("Start_script") == "true") {
+            startScript();
+        }
+        setTimeout(createControls, 800);
+    } else {
+        setTimeout(initMod, 200);
+    }
+}
+
+var reloadId = 0;
+
+setTimeout(initMod, 1000);
+
+var isStarted = false;
+var isReallyStarted = false;
+
+var forest_frame = top.frames["d_act"];
+
+var count = 0;
+var lastTimeStamp = new Date();
+var currentState = "Nothing_forward"
+
+var hitCount = 0;
+var currentTreeId = 0;
+var timeoutId = 0;
+
+var possiblePineIdList = [];
+var possibleOakIdList = [];
+var possibleRedIdList = [];
+
+var ignoredItems = [];
+
+var timeoutIds = [];
+var intervalId = 0;
+var canvIntervalId = 0;
+
+function startBtnClicked() {
+    loadLocalStorage();
+    log.v("startBtnClicked");
+    isReallyStarted = true;
+    startLoop()
+    startGraph()
+}
+
+function startGraph(){
+    canvIntervalId = setInterval(function() {clearDots(); startCanv()}, 2000);
+}
+
+function stopBtnClicked() {
+    log.v("stopBtnClicked");
+    clearInterval(intervalId);
+    do {
+        clearTimeout(timeoutIds.pop())
+    } while (timeoutIds.length != 0)
+    isReallyStarted = false;
+    clearInterval(canvIntervalId);
+    clearDots();
+    isStarted = false;
+    rewriteLocalStorage();
+}
+
+function startLoop() {
+    if(!isStarted){
+        isStarted = true;
+        intervalId = setInterval(looper, getRandom(1000, 2000));
+    } else {
+        log.v("Already Started")
+    }
+}
+
+function stopLoop() {
+   if(isStarted) {
+       clearInterval(intervalId);
+        do {
+            clearTimeout(timeoutIds.pop())
+        } while (timeoutIds.length != 0)
+        isStarted = false
+    } else {
+        log.v("Not started yet")
+    }
+}
+
+function looper() {
+    if(!isReallyStarted) return;
+    log.v("START #" + count)
+    var currTime = new Date()
+    log.i(currTime - lastTimeStamp + " since last time stamp")
+    lastTimeStamp = currTime;
+    var timerCountDown = getSecondsLeft();
+    var overlayResponse = getResponseIfExists();
+    setOverlayOff();
+    log.v("timerCountDown = " + timerCountDown )
+    if(timerCountDown == "-1") { // Timer is off
+        log.i("response = " + overlayResponse + ", currentState = " + currentState);
+        if(overlayResponse == "Вы должны иметь в руках Топор лесоруба") {
+            stopLoop();
+            var promise = new Promise(function (resolve) {
+                jQuery.get('http://newforest.apeha.ru/bag_type_17.chtml', function (response) {
+                    var re = new RegExp('<img width="75" height="50" src="http:\/\/resources\.apeha\.ru\/upload\/1_962\.gif" title="Топор лесоруба">.+\\n.+\\n.+\\n<form method=post><input type=hidden name=actUser-Wear value=(\\d+)>', 'gm');
+                    var match = re.exec(response);
+                    if (match && match[1]) {
+                        var itemId = +match[1];
+
+                        setTimeout(function () {
+                            jQuery.post('http://newforest.apeha.ru/bag_type_17.chtml', { 'actUser-Wear': itemId }).then(function () {
+                                resolve();
+                            });
+                        }, 3000);
+                    }
+                })
+            })
+            promise.then(function() {startLoop()})
+        } else {
+            if(overlayResponse == "Вы травмированы. Для работы необходимо вылечить травмы.") {
+                stopLoop();
+                var promise = new Promise(function (resolve) {
+                    if(healId !== undefined) {
+                        jQuery.post('http://newforest.apeha.ru/ability_type_common.chtml', { 'actUser-UseCast': healId }).then(function () {
+                            resolve();
+                        });
+                    } else {
+                        log.e("healId not defined")
+                    }
+                })
+                promise.then(function() {startLoop()})
+            } else {
+                switch (currentState) {
+                    case ("Pine_forward") : {
+                        hitCount = 0;
+                        if(getLeftForwardAndRight()[1].type == "Pine" ||
+                           overlayResponse != "Перед Вами нечего добывать.") {
+                            clickStartDig();
+                            removeFromPossibleLists(currentTreeId, "Pine");
+                        } else {
+                            currentState = "Nothing_forward"
+                            stopLoop();
+                            timeoutIds.push( setTimeout(startLoop, getRandom(400, 500)) );
+                        }
+                        break;
+                    }
+                    case ("Oak_forward"):
+                    case ("Red_forward"): {
+                        hitCount = 0;
+                        if(getLeftForwardAndRight()[1].type == "Oak" ||
+                           overlayResponse != "Перед Вами нечего добывать.") {
+                            clickStartDig();
+                            removeFromPossibleLists(currentTreeId, "Oak");
+                        } else {
+                            currentState = "Nothing_forward"
+                            stopLoop();
+                            timeoutIds.push( setTimeout(startLoop, getRandom(400, 500)) );
+                        }
+                        break;
+                    }
+                    case ("Nothing_forward"): {
+                        log.v("response = " + overlayResponse);
+                        switch (overlayResponse) {
+                            case ("сосна в радиусе 5 шагов от Вас"):
+                                log.i("Pine in 5-cell radius")
+                                increaseCurrentRadiusTrees()
+                                addToPossibleListItems(getLeftForwardAndRight()[1], "Pine");
+                                stopLoop();
+                                hitCount = 0;
+                                var waitFor = goToTheNearestTree(possibleListItemsMostType(), true)
+                                log.v("Waiting for = " + waitFor)
+                                if(Number.isInteger(waitFor)) {
+                                    timeoutIds.push( setTimeout(startLoop, waitFor * 1000 + getRandom(700, 1200)) );
+                                }
+                                break;
+                            case ("дуб в радиусе 5 шагов от Вас"):
+                                log.i("Oak in 5-cell radius")
+                                increaseCurrentRadiusTrees()
+                                addToPossibleListItems(getLeftForwardAndRight()[1], "Oak");
+                                stopLoop();
+                                hitCount = 0;
+                                var waitFor = possibleListItemsMostType() == "Red" ? goToTheNearestTree("Red", true) : goToTheNearestTree("Oak", true)
+                                log.v("Waiting for = " + waitFor)
+                                if(Number.isInteger(waitFor)) {
+                                    timeoutIds.push( setTimeout(startLoop, waitFor * 1000 + getRandom(700, 1200)) );
+                                }
+                                break;
+                            case ("красное дерево в радиусе 5 шагов от Вас"):
+                                log.i("Red in 5-cell radius")
+                                increaseCurrentRadiusTrees()
+                                addToPossibleListItems(getLeftForwardAndRight()[1], "Red");
+                                stopLoop();
+                                hitCount = 0;
+                                var waitFor = goToTheNearestTree("Red", true);
+                                log.v("Waiting for = " + waitFor)
+                                if(Number.isInteger(waitFor)) {
+                                    timeoutIds.push( setTimeout(startLoop, waitFor * 1000 + getRandom(700, 1200)) );
+                                }
+                                break;
+                            case ("Перед Вами нечего добывать."):
+                                log.i("NOTHING TO DIG, GO TO ANOTHER PLACE")
+                                hitCount = 0;
+                                currentTreeId = 0;
+                                stopLoop();
+                                log.i("currentTreeId cleared");
+                                var waitFor = goToTheNearestTree(possibleListItemsMostType(), isThere5Possible())
+                                log.v("Waiting for = " + waitFor)
+                                if(Number.isInteger(waitFor)) {
+                                    timeoutIds.push( setTimeout(startLoop, waitFor * 1000 + getRandom(700, 1200)) );
+                                }
+                                break;
+                            case ("Ничего не найдено"):
+                                increaseCurrentRadiusTrees()
+                            case ("Not overlayed"):
+                                log.v("hitCount = " + hitCount)
+                                if(hitCount < numberOfSearches() &&
+                                    (isThere5Possible() || (searchOak || searchPine) && getIgnoredItemById(currentTreeId).perc < 100
+                                        || searchRed && getIgnoredItemById(currentTreeId).percRed < 100 )) {
+                                    log.v("SEARCH")
+                                    var direction = fixDirection(currentTreeId);
+                                    log.i("direction = " + direction)
+                                    switch (direction) {
+                                        case ("good") : {
+                                            clickSearch();
+                                            break;
+                                        }
+                                        case ("turn_left") : {
+                                            stopLoop();
+                                            CheckKeyDown({keyCode: 37})
+                                            timeoutIds.push( setTimeout(startLoop, getRandom(500, 1000)) );
+                                            break;
+                                        }
+                                        case ("turn_right") : {
+                                            stopLoop();
+                                            CheckKeyDown({keyCode: 39})
+                                            timeoutIds.push( setTimeout(startLoop, getRandom(500, 1000)) );
+                                            break;
+                                        }
+                                        case ("need_to_go") : {
+                                            stopLoop();
+                                            var waitFor = goToTheNearestTree(possibleListItemsMostType(), isThere5Possible())
+                                            log.v("Waiting for = " + waitFor)
+                                            if(Number.isInteger(waitFor)) {
+                                                timeoutIds.push( setTimeout(startLoop, waitFor * 1000 + getRandom(700, 1200)) );
+                                            }
+                                            break;
+                                        }
+                                        case ("try_to_turn") : {
+                                            stopLoop();
+                                            CheckKeyDown({keyCode: 39})
+                                            timeoutIds.push( setTimeout(startLoop, getRandom(500, 1000)) );
+                                            break;
+                                        }
+                                    }
+                                } else {
+                                    log.i("GO TO ANOTHER PLACE")
+                                    hitCount = 0;
+                                    currentTreeId = 0;
+                                    stopLoop();
+                                    log.i("currentTreeId cleared");
+                                    var waitFor = goToTheNearestTree(possibleListItemsMostType(), isThere5Possible())
+                                    log.v("Waiting for = " + waitFor)
+                                    if(Number.isInteger(waitFor)) {
+                                        timeoutIds.push( setTimeout(startLoop, waitFor * 1000 + getRandom(700, 1200)) );
+                                    }
+                                }
+                                break;
+                            case ("сосна прямо перед Вами"): {
+                                log.e("Pine forward")
+                                removeFromPossibleLists(currentTreeId, "Pine")
+                                clickStartDig();
+                                hitCount = 0
+                                currentState = "Pine_forward"
+                                break;
+                            }
+                            case ("сосна слева от Вас"): {
+                                log.e("Pine on the left, turned and start")
+                                CheckKeyDown({keyCode: 37}) //TurnLeft
+                                removeFromPossibleLists(getLeftForwardAndRight[0], "Pine")
+                                clickStartDig();
+                                hitCount = 0
+                                currentState = "Pine_forward"
+                                break;
+                            }
+                            case ("сосна справа от Вас"): {
+                                log.e("Pine on the right, turned and start")
+                                CheckKeyDown({keyCode: 39}) //TurnRight
+                                removeFromPossibleLists(getLeftForwardAndRight[2], "Pine")
+                                clickStartDig();
+                                hitCount = 0
+                                currentState = "Pine_forward"
+                                break;
+                            }
+                            case ("дуб прямо перед Вами"): {
+                                log.e("Oak forward")
+                                removeFromPossibleLists(currentTreeId, "Oak")
+                                clickStartDig();
+                                hitCount = 0
+                                currentState = "Oak_forward"
+                                break;
+                            }
+                            case ("дуб слева от Вас"): {
+                                log.e("Oak on the left, turned and start")
+                                CheckKeyDown({keyCode: 37}) //TurnLeft
+                                removeFromPossibleLists(getLeftForwardAndRight[0], "Oak")
+                                clickStartDig();
+                                hitCount = 0
+                                currentState = "Oak_forward"
+                                break;
+                            }
+                            case ("дуб справа от Вас"): {
+                                log.e("Oak on the right, turned and start")
+                                CheckKeyDown({keyCode: 39}) //TurnLeft
+                                removeFromPossibleLists(getLeftForwardAndRight[2], "Oak")
+                                clickStartDig();
+                                hitCount = 0
+                                currentState = "Oak_forward"
+                                break;
+                            }
+                            case ("красное дерево прямо перед Вами"): {
+                                log.e("Red forward")
+                                removeFromPossibleLists(currentTreeId, "Red")
+                                clickStartDig();
+                                hitCount = 0
+                                currentState = "Red_forward"
+                                break;
+                            }
+                            case ("красное дерево слева от Вас"): {
+                                log.e("Red on the left, turned and start")
+                                CheckKeyDown({keyCode: 37}) //TurnLeft
+                                removeFromPossibleLists(getLeftForwardAndRight[0], "Red")
+                                clickStartDig();
+                                hitCount = 0
+                                currentState = "Red_forward"
+                                break;
+                            }
+                            case ("красное дерево справа от Вас"): {
+                                log.e("Red on the right, turned and start")
+                                CheckKeyDown({keyCode: 39}) //TurnLeft
+                                removeFromPossibleLists(getLeftForwardAndRight[2], "Red")
+                                clickStartDig();
+                                hitCount = 0
+                                currentState = "Red_forward"
+                                break;
+                            }
+                            default: {
+                                log.e("UNEXPECTED BEHAVIOR")
+                                startLoop()
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } else { // Timer is on
+        stopLoop();
+        if(Number.isInteger(timerCountDown)) {
+            //Checks also for Вы неожиданно быстро управились
+            timeoutIds.push( setTimeout(startLoop,
+            (timerCountDown > 150 ? (timerCountDown - 150) : timerCountDown) * 1000 + getRandom(700, 1100)) );
+        }
+    }
+    log.v("FINISH #" + count)
+    count++;
+}
+
+function numberOfSearches() {
+    var probability = 0;
+    switch(getLeftForwardAndRight()[1].type){
+        case "Red":
+        case "Oak":
+            probability = searchRed ? RedProb.forward : OakProb.forward;
+            break;
+        case "Pine":
+            probability = PineProb.forward;
+            break;
+    }
+    if(probability == 0) probability = 20;
+    log.v("probability = " + Math.ceil(100 / probability))
+    return Math.ceil(100 / probability);
+}
+
+function whatShouldISearch() {
+    if(!searchRed && !searchOak && searchPine) return "Pine";
+    if(!searchRed && searchOak && !searchPine) return "Oak";
+    if(searchRed && !searchOak && !searchPine) return "Red";
+    //TODO ADD for several
+    return "undefined";
+}
+
+function isThere5Possible(){
+    return possibleRedIdList.length > 0 || possibleOakIdList.length > 0 || possiblePineIdList.length > 0;
+}
+
+function increaseCurrentRadiusTrees() {
+    var leftForwardRight = getLeftForwardAndRight();
+
+    if(searchPine) {
+        var PineAround = getAllItemsInRadius(5, "Pine");
+        for(var i = 0; i < PineAround.length; i++) {
+            var ignoredItem = getIgnoredItemById(PineAround[i])
+            switch(PineAround[i]) {
+                case leftForwardRight[0].id:
+                    if(leftForwardRight[0].type == "Pine") {
+                         ignoredItem.perc += PineProb.side;
+                    }
+                    break;
+                case leftForwardRight[2].id:
+                    if(leftForwardRight[2].type == "Pine") {
+                          ignoredItem.perc += PineProb.side;
+                    }
+                    break;
+                case leftForwardRight[1].id:
+                    if(leftForwardRight[1].type == "Pine") {
+                          ignoredItem.perc += PineProb.forward;
+                    }
+                    break;
+                default:
+                    ignoredItem.perc += PineProb.radius;
+            }
+            addOrReplaceIgnoredItem(ignoredItem)
+        }
+    }
+    if(searchOak) {
+        var OakAround = getAllItemsInRadius(5, "Oak");
+        for(var i = 0; i < OakAround.length; i++) {
+            var ignoredItem = getIgnoredItemById(OakAround[i])
+            switch(OakAround[i]) {
+                case leftForwardRight[0].id:
+                    if(leftForwardRight[0].type == "Oak") {
+                         ignoredItem.perc += OakProb.side;
+                    }
+                    break;
+                case leftForwardRight[2].id:
+                    if(leftForwardRight[2].type == "Oak") {
+                          ignoredItem.perc += OakProb.side;
+                    }
+                    break;
+                case leftForwardRight[1].id:
+                    if(leftForwardRight[1].type == "Oak") {
+                          ignoredItem.perc += OakProb.forward;
+                    }
+                    break;
+                default:
+                     ignoredItem.perc += OakProb.radius;
+            }
+            addOrReplaceIgnoredItem(ignoredItem)
+        }
+    }
+
+    if(searchRed) {
+        var RedAround = getAllItemsInRadius(5, "Red");
+        for(var i = 0; i < RedAround.length; i++) {
+            var ignoredItem = getIgnoredItemById(RedAround[i])
+            switch(RedAround[i]) {
+                case leftForwardRight[0].id:
+                    if(leftForwardRight[0].type == "Oak") {
+                         ignoredItem.percRed += RedProb.side;
+                    }
+                    break;
+                case leftForwardRight[2].id:
+                    if(leftForwardRight[2].type == "Oak") {
+                          ignoredItem.percRed += RedProb.side;
+                    }
+                    break;
+                case leftForwardRight[1].id:
+                    if(leftForwardRight[1].type == "Oak") {
+                          ignoredItem.percRed += RedProb.forward;
+                    }
+                    break;
+                default:
+                    ignoredItem.percRed += RedProb.radius;
+            }
+            addOrReplaceIgnoredItem(ignoredItem)
+        }
+    }
+}
+
+function fixDirection(currentTreeId){
+    var items = getAllItemsInRadius(1, "undefined");
+    var lfr = getLeftForwardAndRight();
+    switch (currentTreeId) {
+        case lfr[0].id: if(lfr[0].type == "Oak" || lfr[0].type == "Pine") return "turn_left";
+            break;
+        case lfr[1].id: if(lfr[1].type == "Oak" || lfr[1].type == "Pine") return "good";
+            break;
+        case lfr[2].id: if(lfr[2].type == "Oak" || lfr[2].type == "Pine") return "turn_right";
+            break;
+    }
+    if(getAllItemsInRadius(1, "undefined").indexOf(currentTreeId) == -1) return "need_to_go";
+    return "try_to_turn";
+}
+
+function getMyPositionAndDirection() {
+    return {
+        x: forest_frame.global_data.my_group.posx,
+        y: forest_frame.global_data.my_group.posy,
+        direction: forest_frame.global_data.my_group.napr
+    };
+}
+
+function isInIgnoredItemsByObj(item) {
+    if(item != null && item.hasOwnProperty("id")) {
+        return ignoredItems.find(item => item.id == id) !== undefined
+    }
+}
+
+function getIgnoredItemById(_id) {
+    var item = isInIgnoredItemById(_id) ? ignoredItems.find(item => item.id == _id) : {id: _id, perc: 0, percRed: 0}
+    if(!item.hasOwnProperty("percRed")) item.percRed = 0;
+    return item;
+}
+
+function isInIgnoredItemById(id) {
+    return ignoredItems.find(item => item.id == id) !== undefined
+}
+
+function addOrReplaceIgnoredItem(item) {
+    if(item != null && item.hasOwnProperty("id") && item.hasOwnProperty("perc") && item.hasOwnProperty("percRed")) {
+        var tempIndex = ignoredItems.findIndex(it => it.id == item.id);
+        if(tempIndex != -1) {
+            ignoredItems[tempIndex] = {id: item.id, perc: item.perc, percRed: item.percRed}
+        } else {
+            ignoredItems.push({id: item.id, perc: item.perc, percRed: item.percRed})
+        }
+    }
+}
+
+function getLeftForwardAndRight(){
+    var myPos = getMyPositionAndDirection();
+    var absY = myPos.y;
+    var absX = myPos.x;
+    var tempDirection = parseInt(myPos.direction);
+
+    var f = function(napr) {
+        switch(napr) {
+            case 1:
+                tempY--;
+                break;
+            case 2:
+                tempY--;
+                tempX++;
+                break;
+            case 3:
+                tempX++;
+                break;
+            case 4:
+                tempY++;
+                tempX++;
+                break;
+            case 5:
+                tempY++;
+                break;
+            case 6:
+                tempY++;
+                tempX--;
+                break;
+            case 7:
+                tempX--;
+                break;
+            case 8:
+                tempY--;
+                tempX--;
+                break;
+        }
+    }
+    var tempY = absY; var tempX = absX;
+    f(tempDirection);
+    var forwardId = (tempY - 1) * 6000 + tempX;
+
+    tempY = absY; tempX = absX;
+    f(tempDirection - 1 == 0 ? 8 : tempDirection - 1);
+    var leftId = (tempY - 1) * 6000 + tempX;
+
+    tempY = absY; tempX = absX;
+    f(tempDirection + 1 == 9 ? 1 : tempDirection + 1);
+    var rightId = (tempY - 1) * 6000 + tempX;
+
+    return [ {id: leftId, type: getTreeTypeById(leftId)},
+          {id: forwardId, type: getTreeTypeById(forwardId)},
+          {id: rightId, type: getTreeTypeById(rightId)} ];
+}
+
+function getAllItemsInRadius(radius, TreeType) {
+    var allItemsOnTheScreen = forest_frame.global_data.abs_poses
+    var itemsInRadius = [];
+
+    var currentPosition = {};
+    currentPosition.x = forest_frame.global_data.my_group.posx
+    currentPosition.y = forest_frame.global_data.my_group.posy
+
+    for(var index = 0; index < allItemsOnTheScreen.length; index++) {
+        var item = allItemsOnTheScreen[index];
+        if(item != null && item.hasOwnProperty("type") &&
+            item.hasOwnProperty("id") && item.id != 0 &&
+            item.hasOwnProperty("posx") && Math.abs(currentPosition.x - item.posx) <= radius  &&
+            item.hasOwnProperty("posy") && Math.abs(currentPosition.y - item.posy) <= radius) {
+
+            switch(TreeType) {
+                case "Pine":
+                    if(item.type >= 8 && item.type <= 8 || item.type >= 29 && item.type <= 29) {
+                        itemsInRadius.push(parseInt(item.id));
+                    }
+                    break;
+                case "Oak":
+                case "Red":
+                    if(item.type >= 5 && item.type <= 5 || item.type >= 9 && item.type <= 9 || item.type >= 27 && item.type <= 27 || item.type >= 30 && item.type <= 30) {
+                        itemsInRadius.push(parseInt(item.id));
+                    }
+                    break;
+                case "undefined":
+                    if(item.type >= 5 && item.type <= 5 || item.type >= 8 && item.type <= 9 || item.type >= 27 && item.type <= 27 || item.type >= 29 && item.type <= 30) {
+                        itemsInRadius.push(parseInt(item.id));
+                    }
+                    break;
+            }
+        }
+    }
+
+    return itemsInRadius;
+}
+
+function getTreeTypeById(id) {
+    var typeNum = 0;
+    forest_frame.global_data.abs_poses.forEach(item => {
+            if(item !== undefined && item.id == id) {
+                typeNum = parseInt(item.type)
+            }
+        });
+    if(typeNum >= 8 && typeNum <= 8 || typeNum >= 29 && typeNum <= 29) {
+        return "Pine";
+    }
+    if(typeNum >= 5 && typeNum <= 5 || typeNum >= 9 && typeNum <= 9 || typeNum >= 27 && typeNum <= 27 || typeNum >= 30 && typeNum <= 30) {
+        return "Oak";
+    }
+    return "undefined";
+}
+
+function clickSearch() {
+    hitCount++;
+    top.frames["d_act"].Client.send('actNewMaps-StartSearch=1')
+}
+
+function isInPossibleListItems(id, TreeType) {
+    if(id != 0) {
+        switch(TreeType) {
+            case "Pine":
+                return possiblePineIdList.forEach(item => {if(item.indexOf(id) != -1) return true})
+                return false;
+                break;
+            case "Oak":
+                return possibleOakIdList.forEach(item => {if(item.indexOf(id) != -1) return true})
+                return false;
+                break;
+            case "Red":
+                return possibleRedIdList.forEach(item => {if(item.indexOf(id) != -1) return true})
+                return false;
+                break;
+            case "undefined":
+                return isInPossibleListItems(id, "Pine") ||
+                    isInPossibleListItems(id, "Oak") ||
+                    isInPossibleListItems(id, "Red")
+                break;
+        }
+    }
+}
+
+function removeFromPossibleLists(obj, TreeType) {
+    var id = 0;
+    if(obj != null && obj.hasOwnProperty("id")) {
+        id = obj.id;
+    } else {
+        id = obj;
+    }
+    if(id != 0) {
+        switch(TreeType) {
+            case "Pine":
+                possiblePineIdList = possiblePineIdList.filter(item => {item.indexOf(id) == -1})
+                break;
+            case "Oak":
+                possibleOakIdList = possibleOakIdList.filter(item => {item.indexOf(id) == -1})
+                break;
+            case "Red":
+                possibleRedIdList = possibleRedIdList.filter(item => {item.indexOf(id) == -1})
+                break;
+            case "undefined":
+                removeFromPossibleLists(id, "Pine");
+                removeFromPossibleLists(id, "Oak");
+                removeFromPossibleLists(id, "Red");
+                break;
+        }
+    }
+}
+
+function possibleListItemsMostType() {
+    if(possibleRedIdList.length > 0) return "Red";
+    if(possibleOakIdList.length > 0) return "Oak";
+    if(possiblePineIdList.length > 0) return "Pine";
+    return whatShouldISearch();
+}
+
+function addToPossibleListItems(id, TreeType) {
+    var TreeIds = getAllItemsInRadius(5, TreeType).filter(item => item != id);
+    if(id != 0) {
+        switch(TreeType) {
+            case "Pine":
+                var copy = true;
+                for(var ind = 0; ind < possiblePineIdList.length; ind++) {
+                    if(possiblePineIdList[ind].join(",").localeCompare(TreeIds.join(",")) == 0) {
+                        copy = false
+                    }
+                }
+                if(copy) {
+                     possiblePineIdList.push(TreeIds)
+                }
+                break;
+            case "Oak":
+                var copy = true;
+                for(var ind = 0; ind < possibleOakIdList.length; ind++) {
+                    if(possibleOakIdList[ind].join(",").localeCompare(TreeIds.join(",")) == 0) {
+                        copy = false
+                    }
+                }
+                if(copy) {
+                     possibleOakIdList.push(TreeIds)
+                }
+                break;
+            case "Red":
+            var copy = true;
+                for(var ind = 0; ind < possibleRedIdList.length; ind++) {
+                    if(possibleRedIdList[ind].join(",").localeCompare(TreeIds.join(",")) == 0) {
+                        copy = false
+                    }
+                }
+                if(copy) {
+                     possibleRedIdList.push(TreeIds)
+                }
+                break;
+        }
+    }
+}
+
+function getAllPossibleItemsByType(TreeType) {
+    switch(TreeType) {
+        case "Pine":
+            return possiblePineIdList;
+        case "Oak":
+            return possibleOakIdList;
+        case "Red":
+            return possibleRedIdList;
+    }
+}
+
+function goToTheNearestTree(TreeType, goTo5Possible) {
+    if(goTo5Possible) {
+        var itemsArr = getAllPossibleItemsByType(TreeType);
+        var resultArr = [];
+        itemsArr.forEach(item => {item.forEach(id => {
+            if(getDistanceToId(id) <= 13) {
+                resultArr.push(id)
+            }
+        })})
+        var leastProb = Number.MAX_VALUE;
+        var leastProbId = 0;
+        resultArr.forEach(id => {
+            var tempIgnoredItem = getIgnoredItemById(id);
+            if(TreeType == "Red") {
+                if(tempIgnoredItem.percRed < leastProb) {leastProb = tempIgnoredItem.percRed; leastProbId = tempIgnoredItem.id}
+            } else {
+                if(tempIgnoredItem.perc < leastProb) {leastProb = tempIgnoredItem.perc; leastProbId = tempIgnoredItem.id}
+            }
+        })
+        goToPosition(leastProbId);
+        currentTreeId = parseInt(leastProbId)
+        return getDistanceToId(currentTreeId)
+
+    } else {
+        currentPosition = {
+            x: forest_frame.global_data.my_group.posx,
+            y: forest_frame.global_data.my_group.posy}
+
+        var allItemsOnTheScreen = forest_frame.global_data.abs_poses
+        var TreeItems = [];
+
+        var typedTreeIds = getAllItemsInRadius(13, TreeType)
+
+        for(var index = 0; index < allItemsOnTheScreen.length; index++) {
+            var item = allItemsOnTheScreen[index];
+            if(item !== undefined && item.hasOwnProperty("id")) {
+                for(var idsInd = 0; idsInd < typedTreeIds.length; idsInd++) {
+                    if(typedTreeIds[idsInd] == item.id) {
+                        TreeItems.push(item)
+                    }
+                }
+            }
+        }
+        var TreeItemsRadius = [[],[],[],[],[],[],[],[],[],[],[],[],[]]
+        for(var radius = 1; radius <= 13; radius++) {
+           for(var index = 0; index < TreeItems.length; index++) {
+                var dx = Math.abs(TreeItems[index].posx - currentPosition.x);
+                var dy = Math.abs(TreeItems[index].posy - currentPosition.y);
+                if((dx == radius && dy <= radius) || (dx <= radius && dy == radius))  {
+                    TreeItemsRadius[radius-1].push(TreeItems[index])
+                }
+            }
+        }
+
+        for(var index = 0; index < TreeItemsRadius.length; index++) {
+            if(TreeItemsRadius[index].length > 0) {
+                var leastProb = Number.MAX_VALUE;
+                var leastProbId = 0;
+                TreeItemsRadius[index].forEach(item => {
+                    var tempIgnoredItem = getIgnoredItemById(item.id);
+                    if(TreeType == "Red") {
+                        if(tempIgnoredItem.percRed < leastProb) {leastProb = tempIgnoredItem.percRed; leastProbId = tempIgnoredItem.id}
+                    } else {
+                        if(tempIgnoredItem.perc < leastProb) {leastProb = tempIgnoredItem.perc; leastProbId = tempIgnoredItem.id}
+                    }
+                    
+                })
+                if(leastProb < 100) {
+                    currentTreeId = parseInt(leastProbId);
+                    goToPosition(currentTreeId)
+                    return getDistanceToId(currentTreeId);
+                }
+            }
+        }
+        //TODO ADD IF NOTHING WHERE FOUND
+    }
+}
+
+function getDistanceToId(id) {
+    var num = Number(id)
+    if(!isNaN(num)) {
+        var result = {}
+        result.x = num % 6000
+        result.y = Math.floor(num / 6000) + 1
+        var myPos = getMyPositionAndDirection()
+        return Math.max(Math.abs(result.x - myPos.x), Math.abs(result.y - myPos.y));
+    } else {
+        return "isNan"
+    }
+}
+
+function goToPosition(id) {
+    var tempId = parseInt(id);
+    if(Number.isInteger(tempId) && tempId != 0) {
+        log.i("trying to go to " + tempId)
+        top.frames["d_act"].Client.send('actNewMaps-GotoKletka=' + tempId)
+        return tempId;
+    } else {
+        log.e("cannot go to" + tempId)
+    }
+}
+
+function createNewButton(targetframe, id, style, onclick, inner, parstyle){
+    var navbutton = createMyElement(pers_f, "b", "parent-"+id, "button", parstyle, "", "");
+    var innernavbutton = createMyElement(pers_f, "b", "", "", "width: 100%;", "", "");
+    navbutton.appendChild(innernavbutton);
+    var end_button = createMyElement(targetframe, "button", id, "", style+"outline: none;", onclick, inner);
+    innernavbutton.appendChild(end_button);
+    return navbutton;
+}
+
+function createMyElement(targetframe, elname, elid, elclass, elstyle, elonclick, innertext) {
+    var NewElem = targetframe.createElement(elname);
+    NewElem.setAttribute("id", elid);
+    NewElem.setAttribute("style", elstyle);
+    NewElem.setAttribute("class", elclass);
+    NewElem.setAttribute("onclick", elonclick);
+    NewElem.innerHTML = innertext;
+    return NewElem;
+}
+
+function createControls(){
+    if (top.frames["d_pers"].document.getElementsByTagName('body')[0]!=null) {
+        pers_f = top.frames["d_pers"].document;
+        var bod = pers_f.getElementsByTagName('body')[0];
+        var controlsdiv = createMyElement(pers_f, "div", "controlsdiv", "", "padding:0px 5px 0px 5px;", "", "<p style='text-align:center; font-weight:bold; margin: 5px 0px 0px 0px;'>Скрипт</p>");
+        var startScript = createNewButton(pers_f, "framecontrolstart", "width:100%!important;", "top.frames[\"d_act\"].startScript()", "Рубать", "width:49%;");
+        controlsdiv.appendChild(startScript);
+        var stopScript = createNewButton(pers_f, "framecontrolstop", "width:100%!important;", "top.frames[\"d_act\"].stopScript()", "Отдых", "width:49%;");
+        controlsdiv.appendChild(stopScript);
+        bod.appendChild(controlsdiv);
+        createNavSelector();
+        startShowCoordinates();
+    } else {
+        setTimeout(createControls, 800);
+    }
+}
+
+top.frames["d_act"].startScript = function startScript(){
+    if(!alreadyStarted) {
+        alreadyStarted = true;
+        setTimeout(startBtnClicked, 1000);
+        reloadId = setTimeout(function(){
+            localStorage.setItem("Start_script", "true");
+            stopBtnClicked()
+            top.location.reload()
+        }, 60*60*1000)
+    }
+}
+
+top.frames["d_act"].stopScript = function stopScript(){
+    localStorage.setItem("Start_script", "false");
+    setTimeout(stopBtnClicked, 1000);
+    clearTimeout(reloadId);
+    alreadyStarted = false;
+}
+
+//------------------------------------------------------------------NAV CONTROL
+function byIdFr(dframe, did) {
+    return top.frames[dframe].document.getElementById(did);
+}
+
+function createNavSelector(){
+    if (top.frames["d_pers"].document.getElementsByTagName('body')[0]!=null) {
+        pers_f = top.frames["d_pers"].document;
+        var bod = pers_f.getElementsByTagName('body')[0];
+        var selectdiv = createMyElement(pers_f, "div", "navdiv", "", "padding:0px 5px 0px 5px;", "", "");
+        var titlediv = createMyElement(pers_f, "div", "navtitle", "", "", "", "<b>Координаты:</b> ");
+        selectdiv.appendChild(titlediv);
+        var perscords = createMyElement(pers_f, "span", "perscords", "", "", "", "");
+        titlediv.appendChild(perscords);
+        var standartobjects = createMyElement(pers_f, "div", "standartobjects", "", "", "", "Объекты ");
+        selectdiv.appendChild(standartobjects);
+        var navkords = createMyElement(pers_f, "div", "navkords", "", "", "", "");
+        selectdiv.appendChild(navkords);
+        var nbutt = createNewButton(pers_f, "navcontrol", "width:100%!important;", "top.frames[\"d_act\"].startNavigation()", "Запустить 2гис", "width:100%;"); //TODO
+        var nbutt2 = createNewButton(pers_f, "nav2control", "width:100%!important;", "top.frames[\"d_act\"].stopNavigation()", "Остановить 2гис", "width:100%;"); //TODO
+        navkords.innerHTML = "<label id='navxcord' style='line-height: 25px;float: left;display: block;max-width: 50%;' for='xnavcord'>X - <input type='text' name='xnavcord' id='xnavcord' value='' style='width: 75%;' placeholder='координата'/></label><label id='navycord' style='line-height: 25px;float: left;display: block;max-width: 50%;' for='ynavcord'>Y - <input type='text' name='ynavcord' id='ynavcord' value='' style='width: 75%;' placeholder='координата'/></label><br />";
+        navkords.appendChild(nbutt);
+        navkords.appendChild(nbutt2);
+        var selecttag = createMyElement(pers_f, "select", "NavSelect", "", "width:72%;", "", "");
+        selecttag.setAttribute("name", "NavSelect");
+        selecttag.setAttribute("onchange", "top.frames['d_act'].changeNavTarget(this.value)"); //TODO
+        for (var i = 0; i<NavObjects.length; i++)  {
+            var navoption = pers_f.createElement("option");
+            navoption.setAttribute("value", i);
+            navoption.innerHTML = NavObjects[i].name;
+            selecttag.appendChild(navoption);
+        }
+        standartobjects.appendChild(selecttag);
+        bod.appendChild(selectdiv);
+    }
+}
+
+top.frames["d_act"].startNavigation = function startNavigation(){
+    var xval = parseInt(byIdFr("d_pers", "xnavcord").value);
+    var yval = parseInt(byIdFr("d_pers", "ynavcord").value);
+
+    if(xval !== undefined && yval !== undefined && Number.isInteger(xval) && Number.isInteger(yval) && xval != 0 && yval != 0) {
+        start(xval, yval);
+    }
+}
+
+top.frames["d_act"].stopNavigation = function stopNavigation(){
+    stop()
+}
+
+var NavObjects = [
+    {name :"Не выбрано", latname : "тщту", cordx : "", cordy : "", ofsetx: 0, ofsety: 0, obglocation : ""},
+    {name :"Рудный", latname : "Fort", cordx : 937, cordy : 86, ofsetx: 6, ofsety: 6, obglocation : "Глубокие рудники"},
+    {name :"База", latname : "Fort", cordx : 1557, cordy : 2927, ofsetx: 6, ofsety: 6, obglocation : "Владения изгоев"},
+    {name :"Среднеморье", latname : "Smorye", cordx : 3755, cordy : 2965, ofsetx: 6, ofsety: 6, obglocation : "Окрестности Сморья"},
+    {name :"Утес дракона", latname : "Utes", cordx : 749, cordy : 1129, ofsetx: 6, ofsety: 6, obglocation : "Окрестности Утеса"},
+    {name :"Ковчег", latname : "Kovcheg", cordx : 3755, cordy : 1128, ofsetx: 6, ofsety: 6, obglocation : "Окрестности Ковчега"}
+];
+
+top.frames["d_act"].changeNavTarget = function changeNavTarget(val) {
+    byIdFr("d_pers", "xnavcord").value = NavObjects[val].cordx;
+    byIdFr("d_pers", "ynavcord").value = NavObjects[val].cordy;
+}
+
+function startShowCoordinates(){
+    setInterval(function() {
+        byIdFr("d_pers", "perscords").innerHTML = "x-"+top.frames["d_act"].global_data.my_group.posx+" y-"+top.frames["d_act"].global_data.my_group.posy;
+    }, 1000)
+}
+//------------------------------------------------------------------NAV CONTROL END
+
+//------------------------------------------------------------------NAVIGATION
+function goTo(item) {
+    log.i("trying to go to " + item)
+    if(item != null && item.hasOwnProperty("id") && item.id != 0) {
+        if(getApprovanceById(item.id)) {
+            log.i(item.id)
+            Client.send('actNewMaps-GotoKletka=' + item.id)
+            return getAbs(getMyCurrentCellId(), item.id)
+        }
+        return 0;
+    }
+}
+
+function getMyCurrentCellId() {
+    var x = global_data.my_group.posx
+    var y = global_data.my_group.posy
+    if(!isNaN(x) && !isNaN(y)) {
+        return (y-1)*6000 + x;
+    }
+}
+
+function getApprovanceById(id) {
+    var x = global_data.my_group.posx
+    var y = global_data.my_group.posy
+    if(!isNaN(x) && !isNaN(y)) {
+        if(!isNaN(id)) {
+            var result = getCoordinates(id);
+            if(Math.abs(result.x - x) < 13 && Math.abs(result.y - y) < 13) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+function getCoordinates (e) {
+    var result = {}
+    var num = Number(e)
+    if(!isNaN(num)) {
+        result.x = num % 6000
+        result.y = Math.floor(num / 6000) + 1
+        return result;
+    } else {
+        result = "isNan"
+    }
+};
+
+function getId (x, y) {
+    if(isNaN(x) || isNaN(y)) return "0"
+
+    return (y-1) * 6000 + x;
+};
+
+function getAbs(id1, id2) {
+    if(isNaN(id1) || isNaN(id2)) return "0";
+    var res1 = {}
+    res1.x = Math.abs((id1 % 6000) - (id2 % 6000))
+    res1.y = Math.abs((Math.floor(id1 / 6000) + 1) - (Math.floor(id2 / 6000) + 1))
+
+    if(res1.x > res1.y) return Math.round(res1.x * 2 / 3)
+    else { return Math.round(res1.y * 2 / 3) }
+}
+
+function chooseDirection(x, y) {
+    result = {}
+    result.x = -1;
+    result.y = -1;
+    var x_my = global_data.my_group.posx
+    var y_my = global_data.my_group.posy
+
+    var dx = x_my - x
+    var dy = y_my - y
+
+    if(Math.abs(dx) < 13 && Math.abs(dy) < 13) {
+        result.x = x;
+        result.y = y;
+        result.visible = true;
+        return result;
+    }
+
+    if(dx < 0) {
+        if(dy < 0) { //Done
+            if(Math.abs(dx)) {
+                result.x = 12 + x_my;
+                result.y = 12 + y_my;
+            } else {
+                if(Math.abs(dx) > Math.abs(dy)) {
+                    result.x = 12 + x_my
+                    result.y = (((y - y_my) * 12) / (x - x_my)) + y_my
+                }
+                if(Math.abs(dy) > Math.abs(dx)) {
+                    result.y = 12 + y_my
+                    result.x = (((x - x_my) * 12) / (y - y_my)) + x_my
+                }
+            }
+        }
+        if(dy > 0) {
+            if(Math.abs(dx) == Math.abs(dy)) {
+                result.x = 12 + x_my;
+                result.y = -12 + y_my
+            } else {
+                if(Math.abs(dx) > Math.abs(dy)) {
+                    result.x = 12 + x_my
+                    result.y = (((y - y_my) * 12) / (x - x_my)) + y_my
+                }
+                if(Math.abs(dy) > Math.abs(dx)) {
+                    result.y = -12 + y_my
+                    result.x = -((x - x_my) * 12) / (y - y_my) + x_my
+                }
+            }
+        }
+        if(dy == 0) {
+            result.y = y_my;
+            result.x = 12 + x_my;
+        }
+    }
+    if(dx > 0) {
+        if(dy < 0) {//Done
+            if(Math.abs(dx) == Math.abs(dy)) {
+                result.x = -12 + x_my;
+                result.y = 12 + y_my;
+            } else {
+                if(Math.abs(dx) > Math.abs(dy)) {
+                    result.x = -12 + x_my
+                    result.y = -(((y - y_my) * 12) / (x - x_my)) + y_my
+                }
+                if(Math.abs(dy) > Math.abs(dx)) {
+                    result.y = 12 + y_my
+                    result.x = (((x - x_my) * 12) / (y - y_my)) + x_my
+                }
+            }
+        }
+        if(dy > 0) {//Done
+            if(Math.abs(dx) == Math.abs(dy)) {
+                result.x = -12 + x_my;
+                result.y = -12 + y_my
+            } else {
+                if(Math.abs(dx) > Math.abs(dy)) {
+                    result.x = -12 + x_my
+                    result.y = -(((y - y_my) * 12) / (x - x_my)) + y_my
+                }
+                if(Math.abs(dy) > Math.abs(dx)) {
+                    result.y = -12 + y_my
+                    result.x = -((x - x_my) * 12) / (y - y_my) + x_my
+                }
+            }
+        }
+        if(dy == 0) {
+            result.y = y_my;
+            result.x = -12 + x_my;
+        }
+    }
+    if(dx == 0) {
+        result.x = x_my;
+        if(dy < 0) {
+            result.y = 12 + y_my
+        }
+        if(dy > 0) {
+            result.y = -12 + y_my
+        }
+        if(dy == 0) {
+            result.y = y_my;
+        }
+    }
+
+    result.x = Math.round(result.x)
+    result.y = Math.round(result.y)
+    return result
+}
+
+var interval = 1000;
+var timeoutId;
+
+function goToGlobalCoordinates(x, y) {
+    if(isNaN(x) || isNaN(y)) return;
+
+    var result = chooseDirection(x, y)
+    var id = 0
+    if(result != null && result.hasOwnProperty("x") && result.x != -1 &&
+        result.hasOwnProperty("y") && result.y != -1) {
+            if(result.hasOwnProperty("visible") && result.visible == true) {
+                id = 0;
+                goTo({"id":getId(result.x, result.y)});
+            } else {
+                id = getId(result.x, result.y)
+            }
+
+        }
+
+     if(id != 0) {
+         interval = goTo({"id":id}) * 1000;
+         log.i("interval = " + interval )
+         timeoutId = setTimeout(function() {
+             start(x, y);
+         }, interval)
+     }
+}
+
+function start(x, y) {
+    goToGlobalCoordinates(x, y)
+}
+
+function getCoordinatesAndStart(e) {
+    var result = {}
+    var num = Number(e)
+    if(!isNaN(num)) {
+        result.x = num % 6000
+        result.y = Math.floor(num / 6000) + 1
+        start(result.x, result.y)
+        return result;
+    } else {
+        result = "isNan"
+    }
+}
+
+function stop() {
+    clearTimeout(timeoutId);
+}
+
+//------------------------------------------------------------------NAVIGATION END
+
+//-------------------Helper functions
+function log2(prefix, str) {
+    var d = new Date();
+    console.log(prefix + d.getHours() + ":" + d.getMinutes() + ":" + d.getSeconds() + "  -->" + str)
+}
+
+function clickStartDig() {
+    top.frames["d_act"].Client.send('actNewMaps-StartDobycha=1')
+}
+
+var log = {
+        e:function (str) {log2("_________  ", str)},
+        i:function (str) {log2("______  ", str)},
+        v:function (str) {log2("___  ", str)}
+    }
+
+//Returns random number in range of @min and @max
+function getRandom(min, max) {
+  return Math.random() * (max - min) + min;
+}
+
+// Возвращает случайное целое число между min (включительно) и max (не включая max)
+// Использование метода Math.round() даст вам неравномерное распределение!
+function getRandomInt(min, max) {
+  return Math.floor(Math.random() * (max - min)) + min;
+}
+
+//Returns timer value
+function getSecondsLeft() {
+    var secondsLeft = parseInt(forest_frame.global_data.wait_time) -
+    (parseInt(forest_frame.global_data.timestamp) + parseInt(Math.floor(new Date().getTime() / 1000)) - parseInt(forest_frame.Realtime))
+
+    if(secondsLeft >= 0) {
+        return secondsLeft
+    } else {
+        return "-1";
+    }
+}
+
+//Returns text of overlayed window otherwise "Not overlayed"
+function getResponseIfExists() {
+    if(isOverlayOn()) {
+        return jQuery('#modal_form').text().slice()
+    } else {
+        return "Not overlayed"
+    }
+}
+
+//Returns true or false
+function isOverlayOn() {
+    return jQuery('#overlay').css("display") == "block"
+}
+
+//Clicks the overlay to hide
+function setOverlayOff() {
+    if(isOverlayOn()) {
+        jQuery('#overlay').click()
+    }
+}
+
+var forest_f = top.frames["d_act"].document;
+
+var dotsArr = [];
+
+function createDot(id, text) {
+    var startCellId = forest_frame.global_data.my_group.id - 72012;
+    var dx = (id - startCellId) % 6000;
+    var dy = Math.abs(Math.floor((id - startCellId) / 6000));
+    var rrr = createMyElement(forest_f, "div", "dot-" + id, "", "display:block;position: absolute; z-index:2; width:35px; height:35px; top:0%;left:0%;margin-top:" + (dy * 35) + "px; margin-left:" + (dx * 35) + "px;background-color: #ffffff45;color: red;", "", text);
+    byIdFr("d_act", "canvas").parentNode.appendChild(rrr);
+    dotsArr.push(rrr)
+}
+
+function clearDots() {
+    dotsArr.forEach(function(item, i, arr) {
+        item.remove();
+    })
+    dotsArr = [];
+}
+
+function byIdFr(dframe, did) {
+    return top.frames[dframe].document.getElementById(did);
+}
+
+function createMyElement(targetframe, elname, elid, elclass, elstyle, elonclick, innertext) {
+    var NewElem = targetframe.createElement(elname);
+    NewElem.setAttribute("id", elid);
+    NewElem.setAttribute("style", elstyle);
+    NewElem.setAttribute("class", elclass);
+    NewElem.setAttribute("onclick", elonclick);
+    NewElem.innerHTML = innertext;
+    return NewElem;
+}
+
+function startCanv() {
+    var PineArr = [];
+    var OakArr = [];
+    if(searchPine) PineArr = getAllItemsInRadius(12, "Pine");
+    if(searchOak || searchRed) OakArr = getAllItemsInRadius(12, "Oak");
+
+    byIdFr("d_act", "canvas").parentNode.style.overflow = "hidden";
+
+    PineArr.forEach(id => createDot(id, getIgnoredItemById(id).perc + ""))
+    OakArr.forEach(id => {
+        if(searchRed) {
+            createDot(id, getIgnoredItemById(id).perc + "<br />" + getIgnoredItemById(id).percRed)
+        } else {
+            createDot(id, getIgnoredItemById(id).perc + "")
+        }
+    })
+}
+
+function rewriteLocalStorage() {
+    localStorage.setItem("last_state",
+                      JSON.stringify({"currentState": currentState,
+                        "hitCount": hitCount,
+                        "currentTreeId": currentTreeId}))
+    localStorage.setItem("possibleLists",
+                      JSON.stringify({"possiblePineIdList": possiblePineIdList,
+                        "possibleOakIdList": possibleOakIdList,
+                        "possibleRedIdList": possibleRedIdList}))
+    localStorage.setItem("ignoredItems",
+                      JSON.stringify({"ignoredItems": ignoredItems}))
+}
+
+function loadLocalStorage() {
+    var lastState = JSON.parse(localStorage.getItem("last_state"))
+    if(lastState != null) {
+        if(lastState.hasOwnProperty("currentState")) currentState = lastState.currentState;
+        if(lastState.hasOwnProperty("hitCount")) hitCount = lastState.hitCount;
+        if(lastState.hasOwnProperty("currentTreeId")) currentTreeId = parseInt(lastState.currentTreeId);
+    }
+    var possibleLists = JSON.parse(localStorage.getItem("possibleLists"))
+    if(possibleLists != null) {
+        if(possibleLists.hasOwnProperty("possiblePineIdList")) possiblePineIdList = possibleLists.possiblePineIdList;
+        if(possibleLists.hasOwnProperty("possibleOakIdList")) possibleOakIdList = possibleLists.possibleOakIdList;
+        if(possibleLists.hasOwnProperty("possibleRedIdList")) possibleRedIdList = possibleLists.possibleRedIdList;
+    }
+    var _ignoredItems = JSON.parse(localStorage.getItem("ignoredItems"))
+    if(_ignoredItems != null) {
+        if(_ignoredItems.hasOwnProperty("ignoredItems")) ignoredItems = _ignoredItems.ignoredItems;
+    }
+}
+
+forest_frame.OpenCapcha = function OpenCapcha(data) {
+
+fetch("http://newforest.apeha.ru/interface/codeimage.fpl/" + data.ci).then(data1 => data1.blob()).then(res => {
+    Tesseract.recognize(res)
+        .then(function(result) {
+                    lang: "equ" // Язык текста
+                })
+        .then(function(result) {
+            var r = result.text.replace(/\D/g,'')
+            if(r.length == 4) {
+                setTimeout(function() {forest_frame.Client.send('actNewMaps-StartDobycha='+ data.ci + '.' + r)}, getRandom(500, 700));
+                log.i("sent = " + r);
+            } else {
+                log.i("NOT sent = " + r);
+            }
+        })
+})}
