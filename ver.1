@@ -112,7 +112,7 @@ function looper() {
                     }
                 })
             })
-            promise.then(function() {startLoop()})
+            promise.then(function() {startLoop()} {startBtnClicked()})
         } else {
             if(overlayResponse == "Вы травмированы. Для работы необходимо вылечить травмы.") {
                 stopLoop();
